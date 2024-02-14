@@ -57,11 +57,27 @@ import os
 import signal
 import sys
 
+output_images =[]
+start_time = ""
+import cv2
+from numpysocket import NumpySocket
+
 def sigterm_handler(signum, frame):
+    # global exit_program
+    # print("exit_program...")
+    # exit_program = True
+    # print("success_program...")
+    global start_time
+    change_time = start_time
     # filename = str(sys.argv[1]) + str(time.strftime("%Y-%m-%d_%H:%M:%s"))
     print("Received SIGTERM signal. Cleaning up...")
 
-    # Excel 파일 저장
+    ex_time = time.strftime("%Y-%m-%d_%H-%M:%S")
+
+    # Use the global variable in the directory renaming
+    os.rename(f"./Result/full_frame_detect/{change_time}", f"./Result/full_frame_detect/{ex_time}")
+
+    # Save Excel file
     Saver.save_to_excel()
     print("Excel saved successfully.")
     os._exit(os.EX_OK)
@@ -77,7 +93,6 @@ def gps_data_thread():
             geo = gps.geo_coords() # GPS 최신화
         except Exception as e:
             print(f"GPS 데이터 검색 중 오류 발생: {e}")
-        time.sleep(1)  # 필요에 따라 sleep 시간 조절
 
 
 signal.signal(signal.SIGTERM, sigterm_handler)
@@ -101,9 +116,9 @@ parser.add_argument("--network", type=str, default="fcn-resnet18-cityscapes-1024
 # parser.add_argument("from_path", type=str, help="Path to save data file")
 # parser.add_argument("roi_box[0]", type=str, help="ROI box coordinates as 'start_x,start_y,end_x,end_y'")
 # parser.add_argument("roi_box[1]", type=str, help="ROI box coordinates as 'start_x,start_y,end_x,end_y'")
-# parser.add_argument('--x_coord', type=int, help='X coordinate from roi_box')  신정헌
-# parser.add_argument('--y_coord', type=int, help='Y coordinate from roi_box')
-# parser.add_argument('--reversed', type=int, help='img reversed')
+parser.add_argument('--x_coord', type=int, help='X coordinate from roi_box')
+parser.add_argument('--y_coord', type=int, help='Y coordinate from roi_box')
+parser.add_argument('--reversed', type=int, help='img reversed')
 
 parser.add_argument("--filter-mode", type=str, default="point", choices=["point", "linear"],
                     help="filtering mode used during visualization, options are:\n  'point' or 'linear' (default: 'linear')")
@@ -132,9 +147,9 @@ except:
 net = jetson_inference.segNet(opt.network, sys.argv)
 
 # roi_box[0] = list(map(int, opt.roi_box[0].split(','))) if opt.roi_box else []
-# x_coord = opt.x_coord 신정헌
-# y_coord = opt.y_coord
-# is_reversed = opt.reversed
+x_coord = opt.x_coord
+y_coord = opt.y_coord
+is_reversed = opt.reversed
 
 
 # set the alpha blending value
@@ -180,20 +195,19 @@ if (os.path.isdir("./Result") == False):
 # if (os.path.isdir("./Result/log") == False):
 #     os.mkdir("./Result/log")
 
+
+start_time = time.strftime("%Y-%m-%d_%H-%M:%S")
+
 if (os.path.isdir("./Result/full_frame_detect") == False):
     os.mkdir("./Result/full_frame_detect")
 
-current_time = time.strftime("%Y-%m-%d_%H-%M:%S")
-
-# if (os.path.isdir("./Result/full_frame_detect") == True):
-#     shutil.rmtree("./Result/full_frame_detect")
-if (os.path.isdir(f"./Result/full_frame_detect/{current_time}") == False):
-    os.mkdir(f"./Result/full_frame_detect/{current_time}")
+if (os.path.isdir(f"./Result/full_frame_detect/{start_time}") == False):
+    os.mkdir(f"./Result/full_frame_detect/{start_time}")
 
 
 # time
 
-import cv2
+# import cv2
 
 # create the camera and display
 # camera = jetson_utils.gstCamera(opt.width, opt.height, opt.camera)
@@ -205,191 +219,208 @@ display = videoOutput('display://0', argv=sys.argv)
 roi_x = 1024
 roi_y = 512
 
-# x1 = x_coord 신
-# y1 = y_coord
-# x2 = x_coord + 1024
-# y2 = y_coord + 512
-x1 = 0
-y1 = 0
-x2 = 1024
-y2 = 512
+x1 = x_coord
+y1 = y_coord
+x2 = x_coord + 1024
+y2 = y_coord + 512
+with NumpySocket() as s:
+    s.connect(("localhost", 9999))
+    while True:
+        # now = time.localtime()
+        now = datetime.datetime.now()
 
-while True:
-    # now = time.localtime()
-    now = datetime.datetime.now()
+        cimg = camera.Capture()
+        if cimg is None:
+            print('img error')
+            continue
+        
+        #bgr_img = cudaAllocMapped(width=cimg.width, height=cimg.height, format="rgb8")
+        #cudaConvertColor(cimg, bgr_img)
+        #coutput = cudaToNumpy(bgr_img)
+        #cudaDeviceSynchronize()
+        #print('coutput-',coutput.shape)
+        #s.sendall(coutput)
 
-    cimg = camera.Capture()
-    if cimg is None:
-        print('img error')
-        continue
+        bgr_img = cudaAllocMapped(width=cimg.width, height=cimg.height, format='rgba32f')
+
+        cudaConvertColor(cimg, bgr_img)
+
+        # print('BGR image: ')
+        # print(bgr_img)
+
+        # make sure the GPU is done work before we convert to cv2
+        cudaDeviceSynchronize()
+
+        # convert to cv2 image (cv2 images are numpy arrays)
+        cv_img = cudaToNumpy(bgr_img)
+
+        resize_img = cv2.resize(cv_img, dsize=(1920, 1080), interpolation=cv2.INTER_AREA)
+
+        # if is_reversed == 0:
+        #     resize_img = cv2.flip(resize_img, 0)  # 0 means vertical flip
+        # o_width = cv_img.shape[1]
+        # o_height = cv_img.shape[0]
+
+        o_width = resize_img.shape[1]
+        o_height = resize_img.shape[0]
+
+        # ROI crop
+        # frame = cv_img[y1:y2, x1:x2]
+        frame = resize_img[y1:y2, x1:x2]
+        roi = None
+        # 왼쪽 위: (x1,y2) 오른쪽 위: (x2, y2) 왼쪽 밑: (x1,y1) 오른쪽 및: (x2,y1)
+        while (x1 < 0 or x2 > 1920 or y1 < 0 or y2 > 1080):
+            # frame에서 ROI Crop
+            # roi = cv_img[y1:y2, x1:x2]
+            roi = resize_img[y1:y2, x1:x2]
+
+            if (x2 > 1920):
+                x1 = x1 - (x2 - 1920)
+                roi = cv_img[y1:y2, x1:1920]
+            if (x1 < 0):
+                x1 = abs(x1)
+                x2 = x2 + x1
+                roi = cv_img[y1:y2, 0:x2]
+            if (y2 > 1080):
+                y1 = y1 - (y2 - 1920)
+                roi = cv_img[y1:1920, x1:x2]
+            if (y1 < 0):
+                y1 = abs(y1)
+                y2 = y2 + y1
+                roi = cv_img[0:y2, x1:x2]
+
+            frame = roi
+
+            break;
+
+        frame_rgba = frame.astype(np.float32)
+        width = frame.shape[1]
+        height = frame.shape[0]
+        img = cudaFromNumpy(frame_rgba)
 
 
+        # process the segmentation network
+        net.Process(img, width, height, opt.ignore_class)
 
-    bgr_img = cudaAllocMapped(width=cimg.width, height=cimg.height, format='rgba32f')
+        # generate the overlay and mask
+        net.Overlay(img_overlay, width, height, opt.filter_mode)
+        net.Mask(img_mask, int(width / 2), int(height / 2), opt.filter_mode)
 
-    cudaConvertColor(cimg, bgr_img)
+        # print(img_overlay)
+        img_2 = cudaToNumpy(img_overlay, width, height, 4)
+        img_3 = cv2.cvtColor(img_2, cv2.COLOR_RGBA2BGR)
+        img_4 = cv2.cvtColor(img_2, cv2.COLOR_RGBA2RGB)
 
-    # print('BGR image: ')
-    # print(bgr_img)
+        # print(width, height)
+        omask = cudaToNumpy(img_mask, int(width / 2), int(height / 2), 4)
+        img_mask2 = cv2.cvtColor(omask, cv2.COLOR_RGBA2BGR)
 
-    # make sure the GPU is done work before we convert to cv2
-    cudaDeviceSynchronize()
+        # mask copy
+        cmask = img_mask2.copy()
+        # mask : bgr -> grayscale
+        mask_gray = cv2.cvtColor(cmask, cv2.COLOR_BGR2GRAY)
+        # binary : less than 100 -> 0
+        ret, mask_thres = cv2.threshold(mask_gray, 0, 255, cv2.THRESH_BINARY)
+        # cv2.imshow("d", img_3[0:50,0:50])
 
-    # convert to cv2 image (cv2 images are numpy arrays)
-    cv_img = cudaToNumpy(bgr_img)
+        mask_thres = mask_thres.astype(np.uint8)
 
-    resize_img = cv2.resize(cv_img, dsize=(1920, 1080), interpolation=cv2.INTER_AREA)
+        # find coutour's vertex
+        contours, hierarchy = cv2.findContours(mask_thres, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+        # draw vertex, green
+        cv2.drawContours(mask_thres, contours, -1, (0, 255, 0), 4)
+        # draw vertex, circle, blue
 
-    # if is_reversed == 1: 신정헌
-    #     resize_img = cv2.flip(resize_img, 0)  # 0 means vertical flip
-    # o_width = cv_img.shape[1]
-    # o_height = cv_img.shape[0]
+        for i in contours:
+            for j in i:
+                cv2.circle(mask_thres, tuple(j[0]), 1, (255, 0, 0), -1)
 
-    o_width = resize_img.shape[1]
-    o_height = resize_img.shape[0]
+        # find center
+        # c0 = contours[0]count
+        for c in contours:
+            M = cv2.moments(c)
+            # print(M,type(M))
 
-    # ROI crop
-    # frame = cv_img[y1:y2, x1:x2]
-    frame = resize_img[y1:y2, x1:x2]
-    roi = None
-    # 왼쪽 위: (x1,y2) 오른쪽 위: (x2, y2) 왼쪽 밑: (x1,y1) 오른쪽 및: (x2,y1)
-    while (x1 < 0 or x2 > 1920 or y1 < 0 or y2 > 1080):
-        # frame에서 ROI Crop
-        # roi = cv_img[y1:y2, x1:x2]
-        roi = resize_img[y1:y2, x1:x2]
+            if (M['m00'] > 0):
+                cx = int(M["m10"] / M['m00'])
+                cy = int(M['m01'] / M['m00'])
+                # print("found something : (" + str(cx) + ", " + str(cy) + ")")
+                cv2.rectangle(mask_thres, (325, 240), (100, 140), (255, 0, 0), 3)
+                cv2.circle(mask_thres, (cx, cy), 1, (0, 0, 0), -1)
 
-        if (x2 > 1920):
-            x1 = x1 - (x2 - 1920)
-            roi = cv_img[y1:y2, x1:1920]
-        if (x1 < 0):
-            x1 = abs(x1)
-            x2 = x2 + x1
-            roi = cv_img[y1:y2, 0:x2]
-        if (y2 > 1080):
-            y1 = y1 - (y2 - 1920)
-            roi = cv_img[y1:1920, x1:x2]
-        if (y1 < 0):
-            y1 = abs(y1)
-            y2 = y2 + y1
-            roi = cv_img[0:y2, x1:x2]
+                # cv2.imwrite("./Result/log/" + str(count) + ".jpg", mask_thres) # log 결과 파일
 
-        frame = roi
+                # mb, mg, mr = img_mask2[cx, cy]
+                mb, mg, mr = img_mask2[cy, cx]
+                value = max(mb, mg, mr)
+                if value > 0 and value == mr:  # class 별 색상 찾기
+                    temp = True
+                    # GPS
+                    longitude = geo.lon
+                    latitude = geo.lat
 
-        break;
+                    # print("{:2}".format(str(pothole_count)) + " detection " + "(" + str(cx * 2) + ", " + str(cy * 2) + ") frame : " + str(count))
+                    # img_name = str(now.year) + str(now.month) + str(now.day) + str(now.hour) + str(now.minute) + str(
+                    #     now.second)
+                    # 초의 분을 나타내기 위한 코드
+                    current_time = time.time()
 
-    frame_rgba = frame.astype(np.float32)
-    width = frame.shape[1]
-    height = frame.shape[0]
-    img = cudaFromNumpy(frame_rgba)
+                    # Extract seconds and milliseconds
+                    seconds = int(current_time)
+                    milliseconds = int((current_time - seconds) * 1000)
+
+                    # Format the time string including minutes, seconds, and milliseconds with three decimal places
+                    formatted_time = time.strftime("%Y-%m-%d_%H:%M:%S.{:03d}", time.localtime(seconds))
+
+                    # Include the milliseconds in the formatted string
+                    formatted_time_with_milliseconds = formatted_time.format(milliseconds)
+
+                    img_name = formatted_time_with_milliseconds
+                    #print(img_name)
+
+                    # Excel 데이터 추가
+                    Saver.add_data(img_name, latitude, longitude)
+
+                    pothole_count += 1
+                    break
+
+        # bgr img
+        # output = cudaFromNumpy(img_3)
+        if (temp == False):
+            output_img = cv2.rectangle(resize_img, (x1, y1), (x2, y2), (0, 255, 0), 3)
+            output_resize = cv2.resize(output_img, dsize=(1280, 720), interpolation=cv2.INTER_AREA)
+            # output = cudaFromNumpy(output_img)
+            output = cudaFromNumpy(output_resize)
+
+        else:
+            output_img = cv2.rectangle(resize_img, (x1, y1), (x2, y2), (255, 0, 0), 3)
+            output_img[y1:y2, x1:x2] = img_2
+            output_resize = cv2.resize(output_img, dsize=(1280, 720), interpolation=cv2.INTER_AREA)
+            # output = cudaFromNumpy(output_img)
+            output = cudaFromNumpy(output_resize)
+            # output_img = cv2.cvtColor(output_img, cv2.COLOR_RGBA2BGR)
+            output_img = cv2.cvtColor(output_resize, cv2.COLOR_RGBA2BGR)
 
 
-    # process the segmentation network
-    net.Process(img, width, height, opt.ignore_class)
+            Pothole_img = f"{img_name}.jpg"
+            cv2.imwrite(f"./Result/full_frame_detect/{start_time}/{Pothole_img}", output_img)
+            temp = False
 
-    # generate the overlay and mask
-    net.Overlay(img_overlay, width, height, opt.filter_mode)
-    net.Mask(img_mask, int(width / 2), int(height / 2), opt.filter_mode)
-
-    # print(img_overlay)
-    img_2 = cudaToNumpy(img_overlay, width, height, 4)
-    img_3 = cv2.cvtColor(img_2, cv2.COLOR_RGBA2BGR)
-    img_4 = cv2.cvtColor(img_2, cv2.COLOR_RGBA2RGB)
-
-    # print(width, height)
-    omask = cudaToNumpy(img_mask, int(width / 2), int(height / 2), 4)
-    img_mask2 = cv2.cvtColor(omask, cv2.COLOR_RGBA2BGR)
-
-    # mask copy
-    cmask = img_mask2.copy()
-    # mask : bgr -> grayscale
-    mask_gray = cv2.cvtColor(cmask, cv2.COLOR_BGR2GRAY)
-    # binary : less than 100 -> 0
-    ret, mask_thres = cv2.threshold(mask_gray, 0, 255, cv2.THRESH_BINARY)
-    # cv2.imshow("d", img_3[0:50,0:50])
-
-    mask_thres = mask_thres.astype(np.uint8)
-
-    # find coutour's vertex
-    contours, hierarchy = cv2.findContours(mask_thres, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-    # draw vertex, green
-    cv2.drawContours(mask_thres, contours, -1, (0, 255, 0), 4)
-    # draw vertex, circle, blue
-
-    for i in contours:
-        for j in i:
-            cv2.circle(mask_thres, tuple(j[0]), 1, (255, 0, 0), -1)
-
-    # find center
-    # c0 = contours[0]count
-    for c in contours:
-        M = cv2.moments(c)
-        # print(M,type(M))
-
-        if (M['m00'] > 0):
-            cx = int(M["m10"] / M['m00'])
-            cy = int(M['m01'] / M['m00'])
-            # print("found something : (" + str(cx) + ", " + str(cy) + ")")
-            cv2.rectangle(mask_thres, (325, 240), (100, 140), (255, 0, 0), 3)
-            cv2.circle(mask_thres, (cx, cy), 1, (0, 0, 0), -1)
-
-            # cv2.imwrite("./Result/log/" + str(count) + ".jpg", mask_thres) # log 결과 파일
-
-            # mb, mg, mr = img_mask2[cx, cy]
-            mb, mg, mr = img_mask2[cy, cx]
-            value = max(mb, mg, mr)
-            if value > 0 and value == mr:  # class 별 색상 찾기
-                temp = True
-                # GPS
-                longitude = geo.lon
-                latitude = geo.lat
-
-                # print("{:2}".format(str(pothole_count)) + " detection " + "(" + str(cx * 2) + ", " + str(cy * 2) + ") frame : " + str(count))
-                img_name = str(now.year) + str(now.month) + str(now.day) + str(now.hour) + str(now.minute) + str(
-                    now.second)
-                print(img_name)
-
-                # Excel 데이터 추가
-                Saver.add_data(img_name, latitude, longitude)
-
-                pothole_count += 1
-                break
-
-    # render the images
-
-    # bgr img
-    # output = cudaFromNumpy(img_3)
-    if (temp == False):
-        output_img = cv2.rectangle(resize_img, (x1, y1), (x2, y2), (0, 255, 0), 3)
-        output_resize = cv2.resize(output_img, dsize=(1280, 720), interpolation=cv2.INTER_AREA)
-        # output = cudaFromNumpy(output_img)
-        output = cudaFromNumpy(output_resize)
-
-    else:
-        output_img = cv2.rectangle(resize_img, (x1, y1), (x2, y2), (255, 0, 0), 3)
-        output_img[y1:y2, x1:x2] = img_2
-        output_resize = cv2.resize(output_img, dsize=(1280, 720), interpolation=cv2.INTER_AREA)
-        # output = cudaFromNumpy(output_img)
-        output = cudaFromNumpy(output_resize)
-        # output_img = cv2.cvtColor(output_img, cv2.COLOR_RGBA2BGR)
-        output_img = cv2.cvtColor(output_resize, cv2.COLOR_RGBA2BGR)
-        cv2.imwrite(f"././Result/full_frame_detect/{current_time}" + img_name + ".jpg", output_img)
-        temp = False
-
-    # display.BeginRender()
-    # print(type(img_overlay))
-    display.Render(output)
-    # display.Render(img_mask, width/2, height/2, width)
-    # display.EndRender()
-    count = count + 1
-    if not camera.IsStreaming() or not display.IsStreaming():
-        break
+        # display.BeginRender()
+        # print(type(img_overlay))
+        #display.Render(output)
+        #output_img = cv2.cvtColor(output_img, cv2.COLOR_BGR2RGB)
+        output_resize = output_resize.astype(np.uint8)
+        output_resize = cv2.cvtColor(output_resize, cv2.COLOR_BGR2RGB)
+        # if is_reversed == 0:
+        #     output_resize = cv2.flip(output_resize, 0)
+        s.sendall(output_resize)
+        # display.Render(img_mask, width/2, height/2, width)
+        # display.EndRender()
+        count = count + 1
+        if not camera.IsStreaming() or not display.IsStreaming():
+            break
 
 exit_program = True
 gps_thread.join()  # GPS 스레드가 완료될 때까지 기다림
-
-
-
-
-
-
 
